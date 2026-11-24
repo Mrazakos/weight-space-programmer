@@ -1,0 +1,12 @@
+{
+  "name": "weight-space-programmer",
+  "owner": { "name": "Mrazakos" },
+  "metadata": { "description": "Weight-space programming agents for Claude Code" },
+  "plugins": [
+    {
+      "name": "weight-space-programmer",
+      "source": "./",
+      "description": "Build and improve neural networks by reading and writing their weights directly."
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "weight-space-programmer",
+  "version": "0.1.0",
+  "description": "Agents that build and improve neural networks by reading and writing their weights directly (weight-space programming), with automatic network sizing, pure (no-gradient) and hybrid modes, and context-window-aware improvement loops.",
+  "author": { "name": "Mrazakos" },
+  "homepage": "https://github.com/Mrazakos/weight-space-programmer",
+  "repository": "https://github.com/Mrazakos/weight-space-programmer",
+  "license": "MIT",
+  "keywords": ["neural-networks", "weight-space-programming", "interpretability", "machine-learning", "agents"]
+}
