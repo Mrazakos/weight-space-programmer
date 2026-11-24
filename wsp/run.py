@@ -46,7 +46,7 @@ class Run:
 
     # ---- creation / persistence ---------------------------------------------------------------
     @classmethod
-    def create(cls, path: Path, meta: dict, splits: dict) -> "Run":
+    def create(cls, path: Path, meta: dict, splits: dict, extras: dict | None = None) -> "Run":
         path = Path(path)
         if (path / "run.json").exists():
             raise FileExistsError(f"run {path} already exists")
@@ -55,6 +55,9 @@ class Run:
         np.savez(path / "data" / "train.npz", X=splits["train"][0], y=splits["train"][1])
         np.savez(path / "data" / "val.npz", X=splits["val"][0], y=splits["val"][1])
         np.savez(path / "data" / "heldout" / "test.npz", X=splits["test"][0], y=splits["test"][1])
+        for split, items in (extras or {}).items():
+            folder = path / "data" / "heldout" if split == "test" else path / "data"
+            (folder / f"extra_{split}.json").write_text(json.dumps(items), encoding="utf-8")
         meta.setdefault("created", time.strftime("%Y-%m-%d %H:%M:%S"))
         meta.setdefault("current", None)
         (path / "run.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
@@ -99,7 +102,32 @@ class Run:
         with np.load(f) as z:
             return z["X"], z["y"]
 
+    def load_extra(self, split: str, allow_test: bool = False):
+        """Raw items behind each row (image paths or texts), if the run has them."""
+        if split == "test" and not allow_test:
+            raise PermissionError("the test split is held out")
+        folder = self.path / "data" / "heldout" if split == "test" else self.path / "data"
+        f = folder / f"extra_{split}.json"
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+
+    @property
+    def modality(self) -> str:
+        return self.meta.get("modality", "tabular")
+
+    def vocab(self):
+        f = self.path / "vocab.json"
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+
     # ---- spec meta shared by every network in the run -------------------------------------------
+    def input_spec(self) -> dict:
+        m = self.meta
+        inp = {"modality": self.modality, "shape": list(m.get("input_shape") or [m["n_in"]])}
+        if self.modality == "text":
+            inp["vocab_size"] = int(m["vocab_size"])
+        if self.modality == "image":
+            inp["dtype"] = "uint8"
+        return inp
+
     def base_spec(self) -> dict:
         m = self.meta
         return {
@@ -107,6 +135,7 @@ class Run:
             "task": m["task"],
             "classes": m.get("classes"),
             "feature_names": m["feature_names"],
+            "input": self.input_spec(),
             "input_norm": m.get("input_norm"),
             "output_norm": m.get("output_norm"),
         }

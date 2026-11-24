@@ -58,21 +58,7 @@ def encode_table(df: pd.DataFrame, target: list, task: str | None = None, drop: 
     df = df.drop(columns=[c for c in (drop or []) if c in df.columns])
     df = df.dropna(subset=target).reset_index(drop=True)
     notes = []
-    ydf = df[target]
-    if task is None:
-        task = "regression" if len(target) > 1 else _infer_task(ydf[target[0]])
-    classes = None
-    if task == "classification":
-        if len(target) != 1:
-            raise ValueError("classification supports a single target column")
-        col = ydf[target[0]]
-        classes = sorted(col.astype(str).unique().tolist(), key=_natural_key)
-        lut = {c: i for i, c in enumerate(classes)}
-        y = col.astype(str).map(lut).to_numpy().astype(int)
-    else:
-        y = ydf.to_numpy().astype(float)
-        if y.shape[1] == 1:
-            y = y[:, 0]
+    y, task, classes = encode_target(df, target, task)
 
     feats = df.drop(columns=target)
     cols = []
@@ -101,6 +87,47 @@ def encode_table(df: pd.DataFrame, target: list, task: str | None = None, drop: 
         raise ValueError("no usable feature columns")
     X = np.hstack(cols)
     return X, y, {"task": task, "feature_names": names, "classes": classes, "target": target, "notes": notes}
+
+
+def encode_target(df: pd.DataFrame, target: list, task: str | None = None):
+    """Returns (y, task, classes). Rows with a missing target must be dropped beforehand."""
+    missing = [t for t in target if t not in df.columns]
+    if missing:
+        raise ValueError(f"target column(s) {missing} not found; columns are {list(df.columns)}")
+    ydf = df[target]
+    if task is None:
+        task = "regression" if len(target) > 1 else _infer_task(ydf[target[0]])
+    classes = None
+    if task == "classification":
+        if len(target) != 1:
+            raise ValueError("classification supports a single target column")
+        col = ydf[target[0]]
+        classes = sorted(col.astype(str).unique().tolist(), key=_natural_key)
+        lut = {c: i for i, c in enumerate(classes)}
+        y = col.astype(str).map(lut).to_numpy().astype(int)
+    else:
+        y = ydf.to_numpy().astype(float)
+        if y.shape[1] == 1:
+            y = y[:, 0]
+    return y, task, classes
+
+
+def encode_features(df: pd.DataFrame, feature_names: list, fill: list | None = None):
+    """Encode new rows into an existing run's feature layout (numeric columns and 'col=cat' one-hots)."""
+    X = np.zeros((len(df), len(feature_names)))
+    notes = []
+    for j, name in enumerate(feature_names):
+        f = fill[j] if fill else 0.0
+        if name in df.columns:
+            s = pd.to_numeric(df[name], errors="coerce")
+            X[:, j] = s.fillna(f).to_numpy(dtype=float)
+        elif "=" in name and name.split("=", 1)[0] in df.columns:
+            col, cat = name.split("=", 1)
+            X[:, j] = (df[col].astype(str) == cat).to_numpy(dtype=float)
+        else:
+            X[:, j] = f
+            notes.append(f"no column for feature {name!r}; filled with the training mean")
+    return X, notes
 
 
 def _natural_key(s: str):
@@ -136,8 +163,13 @@ def load_task(path: str, n: int, seed: int):
 
 
 def split(X, y, task: str, fracs=(0.6, 0.2, 0.2), seed: int = 0):
+    idxs = split_indices(y, task, fracs, seed)
+    return {k: (X[v], y[v]) for k, v in idxs.items()}
+
+
+def split_indices(y, task: str, fracs=(0.6, 0.2, 0.2), seed: int = 0) -> dict:
     rng = np.random.default_rng(seed)
-    n = len(X)
+    n = len(y)
     if task == "classification":
         parts = {"train": [], "val": [], "test": []}
         for c in np.unique(y):
@@ -151,7 +183,7 @@ def split(X, y, task: str, fracs=(0.6, 0.2, 0.2), seed: int = 0):
         a = int(fracs[0] * n)
         b = a + int(fracs[1] * n)
         idxs = {"train": idx[:a], "val": idx[a:b], "test": idx[b:]}
-    return {k: (X[v], y[v]) for k, v in idxs.items()}
+    return idxs
 
 
 def norm_stats(X: np.ndarray) -> dict:

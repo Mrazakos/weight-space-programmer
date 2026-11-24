@@ -48,6 +48,13 @@ class Network:
         return int(sum(v.size for v in self.W.values()))
 
     def arch_str(self) -> str:
+        arch = self.spec.get("arch")
+        if arch == "net":
+            from .graph import describe
+            return describe(self.spec)
+        if arch == "torch_module":
+            src = (self.spec.get("source") or {}).get("path", "?")
+            return f"torch module {Path(src).name} ({len(self.W)} tensors)"
         if not self.is_mlp:
             return f"opaque ({len(self.W)} tensors)"
         acts = ",".join(L["act"] for L in self.layers)
@@ -61,6 +68,10 @@ class Network:
         for k, v in self.W.items():
             if not np.all(np.isfinite(v)):
                 raise NetworkError(f"tensor {k} contains NaN/inf")
+        if self.spec.get("arch") == "net":
+            from .graph import validate
+            validate(self.spec, self.W)
+            return
         if not self.is_mlp:
             return
         layers = self.layers

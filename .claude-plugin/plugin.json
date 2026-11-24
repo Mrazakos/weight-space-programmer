@@ -1,10 +1,10 @@
 {
   "name": "weight-space-programmer",
-  "version": "0.1.0",
-  "description": "Agents that build and improve neural networks by reading and writing their weights directly (weight-space programming), with automatic network sizing, pure (no-gradient) and hybrid modes, and context-window-aware improvement loops.",
+  "version": "0.2.0",
+  "description": "Get a working neural network for any task: agents pick the architecture (MLP, CNN, text models, transformers) and size, write weights directly where they can reason about the task, train where they can't, and improve existing scikit-learn/PyTorch models by reading and editing their weights.",
   "author": { "name": "Mrazakos" },
   "homepage": "https://github.com/Mrazakos/weight-space-programmer",
   "repository": "https://github.com/Mrazakos/weight-space-programmer",
   "license": "MIT",
-  "keywords": ["neural-networks", "weight-space-programming", "interpretability", "machine-learning", "agents"]
+  "keywords": ["automl", "pytorch", "neural-networks", "weight-space-programming", "interpretability", "machine-learning", "agents"]
 }

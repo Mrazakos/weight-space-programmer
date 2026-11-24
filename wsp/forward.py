@@ -62,7 +62,8 @@ def to_prediction(spec: dict, out: np.ndarray):
         on = spec.get("output_norm")
         y = out * np.asarray(on["std"]) + np.asarray(on["mean"]) if on else out
         return y, None
-    last = spec["layers"][-1]["act"]
+    from .backend import output_act
+    last = output_act(spec)
     if out.shape[1] == 1:
         thr = 0.5 if last in ("sigmoid", "step") else 0.0
         pred = (out[:, 0] > thr).astype(int)

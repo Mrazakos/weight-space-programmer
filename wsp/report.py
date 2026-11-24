@@ -5,10 +5,9 @@ import time
 
 import numpy as np
 
+from .backend import fit, predict
 from .evaluate import compute_metrics, primary_metric
-from .forward import predict
 from .netspec import Network, init_weights
-from .train import fit
 
 
 def _metrics(run, net: Network, X, y) -> dict:
@@ -17,21 +16,31 @@ def _metrics(run, net: Network, X, y) -> dict:
     return compute_metrics(run.task, y, pred, prob, k)
 
 
-def baseline(run, net: Network, seeds=(0, 1, 2), epochs: int = 400) -> dict | None:
-    """Same architecture, random init, Adam + early stopping on val. Best of 3 seeds by val."""
-    if not net.is_mlp:
+def baseline(run, net: Network, seeds=(0, 1, 2), epochs: int = 400, max_minutes: float = 6.0) -> dict | None:
+    """Same architecture, random init, Adam + early stopping on val. Best of the seeds by val."""
+    arch = net.spec.get("arch")
+    if arch not in ("mlp", "net"):
         return None
     Xtr, ytr = run.load_split("train")
     Xva, yva = run.load_split("val")
     layers = [dict(L) for L in net.layers]
     for L in layers:
-        if L["act"] == "step":
+        if L.get("act") == "step":
             L["act"] = "sigmoid"
     best = None
     key = primary_metric(run.task)
+    if arch == "net":
+        seeds = seeds[:2]
     for s in seeds:
-        b = Network({**net.spec, "layers": layers}, init_weights(layers, zero=False, seed=s))
-        b, _, ep = fit(b, Xtr, ytr, Xva, yva, epochs=epochs, lr=3e-3, batch=64, patience=40, seed=s)
+        if arch == "mlp":
+            b = Network({**net.spec, "layers": layers}, init_weights(layers, zero=False, seed=s))
+            b, _, ep = fit(b, Xtr, ytr, Xva, yva, epochs=epochs, lr=3e-3, batch=64, patience=40, seed=s)
+        else:
+            from .graph import init_params
+            spec = {**net.spec, "layers": layers}
+            b = Network(spec, init_params(spec, zero=False, seed=s))
+            b, _, ep = fit(b, Xtr, ytr, Xva, yva, epochs=60, lr=1e-3, batch=64, patience=6, seed=s,
+                           max_minutes=max_minutes / len(seeds))
         val = _metrics(run, b, Xva, yva)
         if best is None or val[key] > best[1][key]:
             best = (b, val, ep, s)
@@ -60,7 +69,8 @@ def make_report(run, version: str | None = None, with_baseline: bool = True) -> 
         lines.append(f"- NOTE: the test split was already evaluated before (first at {run.meta['test_seen']}); "
                      "later improvements may be biased toward it")
     lines.append("")
-    if net.is_mlp:
+    from .backend import is_runnable
+    if is_runnable(net):
         val = _metrics(run, net, Xva, yva)
         test = _metrics(run, net, Xte, yte)
         lines += ["| model | split | " + " | ".join(test) + " |", "|---|---|" + "---|" * len(test)]

@@ -19,6 +19,7 @@ def compute_metrics(task: str, y, pred, prob=None, k: int | None = None) -> dict
             f1s.append(2 * tp / (2 * tp + fp + fn))
         m = {"accuracy": float(np.mean(pred == y)), "macro_f1": float(np.mean(f1s)) if f1s else 0.0}
         if prob is not None:
+            prob = np.asarray(prob, dtype=np.float64)
             eps = 1e-12
             if prob.ndim == 1:
                 p = np.clip(prob, eps, 1 - eps)

@@ -1,18 +1,27 @@
 # Weight-Space Programmer
 
-A Claude Code plugin whose agents **build and improve neural networks by reading and writing their weights directly**. The agents don't hand weights off to an optimizer. They treat the weights as a program: they read them to understand what the network computes, then write or edit them to change it.
+**Get a working neural network for any prediction task, and see exactly how its weights were made.** Give a Claude Code agent a table, a folder of labelled images, a text dataset, or a plain-language task description. The agent:
 
-It is inspired by *[Sparks of Weight-Space Programming: LLMs can natively read & write neural network weights](https://rikiyat.github.io/blog/weight-space-programming/)* (Takehi, Teoh, Zhang, Khattab, MIT CSAIL, 2026). That post had a language model write networks from all-zero weights with no gradient training, and repair trained policies and language models by editing a small fraction of their weights. This repository is an independent implementation of that workflow for small networks. It is not affiliated with the authors.
+- picks the architecture (MLP, CNN, bag-of-words, 1D-CNN, transformer) and the size
+- **writes the weights directly** where it can reason about the task
+- trains with gradients where it can't
+- reads and edits the result
+- hands you a validated model you can export and run on new data
+
+It can also **improve networks you already have**: scikit-learn, PyTorch state_dicts, TorchScript, `torch.export` programs, pickled modules, `.safetensors` and `.npz`.
+
+Inspired by *[Sparks of Weight-Space Programming: LLMs can natively read & write neural network weights](https://rikiyat.github.io/blog/weight-space-programming/)* (Takehi, Teoh, Zhang, Khattab, MIT CSAIL, 2026). That post had a language model write networks from all-zero weights with no gradient training, and repair trained policies and language models by editing a small fraction of their weights. This repository is an independent implementation of that workflow. It is not affiliated with the authors.
 
 ## What you get
 
 | Piece | What it does |
 |---|---|
-| `/wsp-build <data or "task">` | Builds a network for a dataset (csv/tsv/parquet/json/xlsx/npz) or a plain-language task description. The agent **chooses the network size**, then writes the weights. |
-| `/wsp-improve <run or model file>` | **Improvement mode.** Works on a network the agents built, or one trained elsewhere (scikit-learn `.pkl`, torch `.pt`, `.safetensors`, `.npz`). It loops until the forward-pass or context budget is spent, and can run several rounds that hand off state between them. |
-| `wsp-pure` agent | Follows the blog post's rules: no gradients, all-zero start, metered forward passes, and the weights come only from reasoning. |
-| `wsp-hybrid` agent | Can also run gradient training (`wsp fit`). It combines programmed structure, gradient fine-tuning and surgical hand edits. |
-| `wsp` toolkit | A numpy CLI that gives both agents a sandbox: weight dumps, weight programs, edits, metered evaluation, inspection, versioning, import/export, and a final report. |
+| `/wsp-build <data or "task">` | Builds a network for tabular data, images (class subfolders), text (auto-detected text column), or a task description. Delivers `report.md`, an exported model and a `predict` command. |
+| `/wsp-improve <run or model>` | **Improvement mode** for generated or externally trained networks. It loops until the forward-pass or context budget is spent, then resumes in fresh rounds through `handoff.md`. |
+| `wsp-auto` agent (default) | Writes weights by reasoning when the task is programmable (rules, geometry, templates, lexicons). Trains when it is statistical (natural images, free text). Makes surgical hand edits on top of both. |
+| `wsp-pure` agent | The blog post's rules: no gradients, an all-zero start, metered forward passes. |
+| `wsp-hybrid` agent | Mixes gradients and hand edits freely. |
+| `wsp` toolkit | A metered command-line sandbox that the agents drive: data loading, sizing, weight dumps, weight programs, edits, evaluation, inspection, training, import/export, `predict`, and a final report. |
 
 ## Install
 
@@ -23,105 +32,142 @@ In Claude Code:
 /plugin install weight-space-programmer@weight-space-programmer
 ```
 
-The agents call the Python toolkit, so install it too (Python ≥ 3.10):
+The agents call the Python toolkit (Python ≥ 3.10). The skills install it automatically if it's missing, or you can install it yourself:
 
 ```
-pip install "git+https://github.com/Mrazakos/weight-space-programmer"
-# optional extras: [sklearn] for scikit-learn import/export, [torch], [safetensors]
-pip install "weight-space-programmer[sklearn] @ git+https://github.com/Mrazakos/weight-space-programmer"
+pip install "weight-space-programmer[all] @ git+https://github.com/Mrazakos/weight-space-programmer"
 ```
 
-The skills also install the toolkit automatically if `import wsp` fails.
+`[all]` pulls in PyTorch, Pillow, scikit-learn and safetensors. Tabular-only use needs only numpy and pandas: `pip install "git+https://github.com/Mrazakos/weight-space-programmer"`.
 
 ## Usage
 
 ```
-/wsp-build data/churn.csv --target churned
-/wsp-build "classify whether a 2-D point lies inside the ring 1 <= r <= 2" --name ring
-/wsp-build data/houses.csv --target price --mode hybrid --budget 80
+/wsp-build data/churn.csv --target churned                       # tabular
+/wsp-build data/photos/                                          # images: photos/<class>/*.jpg
+/wsp-build data/tickets.csv --target team                        # text column auto-detected
+/wsp-build "is a 2-D point inside the ring 1 <= r <= 2?"         # task description only
+/wsp-build data/reviews.csv --target sentiment --mode pure       # no gradients at all
 
-/wsp-improve runs/ring --rounds 3
-/wsp-improve models/classifier.pkl --data data/val_data.csv --target label --mode pure
+/wsp-improve runs/churn --rounds 3
+/wsp-improve models/resnet_small.pt --data data/photos/          # TorchScript / torch.export / pickled module
+/wsp-improve models/clf.pkl --data data/val.csv --target label   # scikit-learn MLP or pipeline
 ```
 
-Each run lives in `./runs/<name>/`. Set `WSP_RUNS` to put runs somewhere else. A run directory holds:
+To use the result:
 
-- `nets/vNNN.json/.npz`: every network version
+```
+python -m wsp predict runs/churn new_customers.csv --out preds.csv   # same preprocessing as training
+python -m wsp export runs/photos model.ts                            # standalone TorchScript (raw images in)
+```
+
+Each run lives in `./runs/<name>/`. Set `WSP_RUNS` to put runs elsewhere. A run directory holds:
+
+- `nets/vNNN.*`: every version
 - `history.jsonl`: version tree and evaluations
 - `programs/`: the weight program behind each version
-- `log.md`: the agent's hypotheses and design notes
-- `handoff.md`: state for the next improvement session
-- `report.md`: held-out test score next to a gradient baseline with the same architecture
+- `log.md`: hypotheses and design notes
+- `handoff.md`: state for the next session
+- `report.md`: held-out test score next to a gradient-trained baseline with the same architecture
 
-### How the agent sizes the network
-`wsp size` lists candidate architectures. For each it shows the parameter count, parameters per training sample, and how many tokens a full weight dump would take against the remaining context budget.
+## How the agents decide
 
-- **Pure agent:** plans the computation as a list of hidden units, each with a stated job (a hyperplane, a threshold, a logic gate, a bump, a radius). The width is the number of jobs. It keeps the full dump small enough to read every weight.
-- **Hybrid agent:** targets about 1–2 parameters per sample on tabular data and keeps the network small enough to hand-edit.
+**Architecture and size.** `wsp size` lists candidates for the data type. Each comes with its parameter count, parameters per training sample, and the cost of a full weight dump against the remaining context budget. The agent picks one and records why in `log.md`.
 
-Either agent records its decision and the reason in `log.md`.
+| Data | Programmable choices (hand-written weights) | Learned choices |
+|---|---|---|
+| Tabular | small MLP whose units are hyperplanes, thresholds, logic gates, bumps, radii | MLP sized to about 1–2 params per sample |
+| Images | `linear` templates built from class-mean images, a CNN with designed filters (edges, blobs, colours) | `cnn` width 16–64, depth 2–3 |
+| Text | `bow --dim 1` lexicon scorer, per-class lexicons, `conv1d` negation detectors | `bow`, `cnn1d`, `transformer` (by data size) |
 
-### Context-window-aware improvement
-- **Context ledger:** `wsp` charges every output it prints, and every dump file it writes, to a per-session ledger. The default budget is a 1M-token window minus a 25% reserve. Override it with `WSP_CONTEXT_TOKENS` or `--context-tokens`.
-- **Networks that fit:** if a network's full weight dump fits, the agent reads every weight.
-- **Networks that don't fit:** the agent uses the **sandbox-inspection fallback**: `inspect stats | svd | unit | probe` and sliced dumps. It locates the responsible component before editing, the same approach the blog post used to edit Qwen.
-- **Ending a session:** when the forward-pass budget or the ledger runs out, the agent writes `handoff.md`. The next `/wsp-improve` round starts a fresh agent with a fresh context that resumes from it.
+You can also describe any custom stack as JSON (`init --layers`). The available layers are `dense`, `conv2d`, `maxpool2d`, `avgpool2d`, `flatten`, `global_pool`, `embedding`, `posembed`, `conv1d`, `transformer`, `layernorm` and `act`.
+
+**Weights.** The auto agent profiles the data and looks at examples. For images it reads the contact sheets wsp renders. Then it chooses:
+- **Programmable task:** it writes the weights in a numpy weight program that never sees the data.
+- **Statistical task, or when the program falls short:** it trains, optionally starting from its programmed network.
+- **Either way:** it then reads the weights, diagnoses the worst examples, and makes targeted fixes that it keeps or reverts.
+
+**Context-window-aware improvement.**
+- **Context ledger:** every wsp output is charged to a per-session ledger. The default budget is a 1M-token window minus a 25% reserve; override it with `WSP_CONTEXT_TOKENS` or `--context-tokens`.
+- **Networks that fit:** if the full weight dump fits, the agent reads every weight.
+- **Networks that don't fit:** it uses **sandbox inspection** instead: `inspect stats | svd | unit | tokens | probe` plus sliced dumps. It locates the component responsible before editing, the same approach the blog post used to edit Qwen.
+- **Ending a session:** when a budget runs out, the agent writes `handoff.md`. The next `/wsp-improve` round starts a fresh agent with a fresh context that resumes from it.
+
+## Example: programmed vs trained
+
+Results on test data held out until the end:
+
+| Task | Network | How the weights were made | Test | Same-architecture gradient baseline |
+|---|---|---|---|---|
+| 3-bit parity | 3-3-1, 16 params | hand-written counting units | 100% | 79% |
+| ring 1 ≤ r ≤ 2 (from a sentence) | 2-2-1-1, 11 params, `square`/`abs` | agent-written: computes \|r²−2.5\| exactly | 100% | 98.5% |
+| synthetic reviews | bag-of-words, 48 params | 20-word hand-written lexicon | 85.8% val (fails on negation, which a `conv1d` detector fixes) | n/a |
+| 8×8 handwritten digits (auto agent, unattended) | CNN, 6,090 params | 16 hand-designed first-layer filters (edges, strokes, blobs), frozen; rest trained | 98.9% | 98.6% |
 
 ## The `wsp` toolkit
 
 ```
-python -m wsp new <run> --data F --target COL | --task task.py   [--mode pure|hybrid] [--budget N]
+python -m wsp new <run> --data F --target COL | --data IMAGE_FOLDER | --task gen.py   [--mode auto|pure|hybrid]
 python -m wsp session|status|profile|sample|size <run>
-python -m wsp init <run> --arch 8-3 --act relu,softmax          # zero weights (pure)
-python -m wsp dump <run> [--layer L] [--tensor W0] [--rows a:b]  # weights as text, chunked
-python -m wsp write <run> program.py                             # numpy-only weight program
-python -m wsp set|patch|resize <run> ...                         # surgical edits
-python -m wsp eval <run> [--activations]                         # METERED forward pass
-python -m wsp inspect <run> stats|unit|slice|svd|probe
+python -m wsp init <run> --arch 8-3 | --preset cnn --width 16 | --layers layers.json   [--random]
+python -m wsp dump <run> [--layer NAME] [--tensor T] [--rows a:b]   # weights as text, chunked
+python -m wsp write <run> program.py                                # numpy-only weight program
+python -m wsp set|patch|resize <run> ...                            # surgical edits
+python -m wsp eval <run> [--activations]                            # METERED forward pass
+python -m wsp inspect <run> stats|unit|tokens|slice|svd|probe
+python -m wsp fit <run> [--base v] [--freeze names]                 # auto/hybrid modes only
 python -m wsp history|revert|best <run>
-python -m wsp fit <run>                                          # hybrid only
-python -m wsp import|export <run> model.{pkl,pt,safetensors,npz}
-python -m wsp report <run>                                       # held-out test + baseline
+python -m wsp import|export <run> model.{pkl,pt,pt2,ts,safetensors,npz}
+python -m wsp predict <run> new_data [--out preds.csv]
+python -m wsp report <run>
 ```
 
-A weight program is a plain Python file. It never receives data:
+A weight program is a plain Python file. For text runs, `spec["vocab"]` is available:
 
 ```python
-import numpy as np
-
 def program(spec, W):
-    # 3-bit parity with 3 counting units: h_j = relu(x0+x1+x2 - j)
-    W["W0"][:] = 1.0
-    W["b0"][:] = [0, -1, -2]
-    W["W1"][:, 0] = [10, -20, 20]   # 10*s - 20*relu(s-1) + 20*relu(s-2) alternates with parity
-    W["b1"][:] = -5
+    idx = {w: i for i, w in enumerate(spec["vocab"])}
+    for w in ["great", "excellent", "love"]:
+        W["emb.E"][idx[w], 0] = 1.0       # positive words
+    for w in ["awful", "broken", "hate"]:
+        W["emb.E"][idx[w], 0] = -1.0      # negative words
+    W["out.W"][0, 0] = 40.0                # mean polarity -> confident sigmoid
     return W
 ```
 
-A demo on `examples/tasks/parity3.py`: this hand-written program scores 100% on held-out data after one forward pass. A gradient-trained network with the same 3-3-1 architecture scores about 79%.
-
 ### Rules enforced in pure mode
 - `fit` and random initialization are refused.
-- Weight programs pass an AST guard: only `numpy` and `math` imports, no file/OS access, no `eval`/`exec`/`getattr`, no dunder attributes. The program receives the spec and the weights, never the data.
-- Forward passes (`eval`, `inspect probe`) draw on a per-session budget. The default is 50, the largest budget in the blog post.
+- Weight programs pass an AST guard: only `numpy` and `math` imports, no file/OS access, no `eval`/`exec`/`getattr`, no dunder attributes. Programs never receive data.
+- Forward passes (`eval`, `inspect probe`) draw on a per-session budget. The default is 50.
 - The test split is held out until `report`.
 
-The AST guard enforces the rules for a cooperating agent. **It is not a security sandbox.** Run only weight programs you would run as ordinary Python.
+The AST guard enforces the rules for a cooperating agent. **It is not a security sandbox.** Loading pickles, full torch modules or `.pt2` files executes code, so wsp requires `--trust` for them.
 
 ## Examples
 
 ```
-python examples/make_datasets.py      # iris.csv, breast_cancer.csv, diabetes.csv,
-                                      # breast_cancer_mlp.pkl and a deliberately damaged copy
-/wsp-build examples/tasks/ring.py ... # or any task description
-/wsp-improve examples/data/breast_cancer_mlp_damaged.pkl --data examples/data/breast_cancer.csv --target diagnosis
+python examples/make_datasets.py
 ```
 
+This writes into `examples/data/`:
+- tables: `iris.csv`, `breast_cancer.csv`, `diabetes.csv`
+- images: `digits/` (8×8 digit images in class folders)
+- text: `reviews.csv` (synthetic reviews with negation)
+- models: a trained and a deliberately damaged scikit-learn model
+
+There are also task generators in `examples/tasks/`:
+- `parity3.py`: tabular logic
+- `ring.py`: geometry
+- `negation_sentiment.py`: text, with `MODALITY='text'`
+
 ## Limitations
-- wsp can only run forward passes on fully connected networks (MLPs). Other imported architectures come in as *opaque*: inspection and edits work, evaluation does not, so export and evaluate them in their own framework.
-- `.pt`, `.npz` and `.safetensors` files don't record activations. Pass `--act` when importing them.
-- Token counts are estimates (about 2.5 characters per token for numbers, 3.5 for prose).
-- Pure weight-space programming works best when the task has structure an agent can reason about. On unstructured, high-dimensional data, expect the hybrid agent or the gradient baseline to win. `report.md` always shows that comparison.
+- **Forward passes on imported models:** these run only for MLPs and for models imported as TorchScript, `torch.export`, or a pickled module. Weights-only state_dicts of other architectures import as *opaque*: editable, but not runnable.
+- **Inspecting imported torch modules:** `stats`, `slice` and `svd` work; unit-level inspection and probes don't.
+- **Text tokenization:** text uses word- or character-level tokenization built from the training split. Imported text models only make sense if they share that vocabulary.
+- **No generation:** there are no sequence-to-sequence or generative tasks; wsp covers classification and regression only.
+- **Training speed:** training runs on CPU unless PyTorch sees a GPU. Large image sets are slow, so use `--image-size` and `fit --max-minutes`.
+- **Token counts** are estimates.
+- **Where pure programming wins:** pure weight programming shines on structured tasks. On natural images or open-ended text, expect the auto agent to train. `report.md` always shows the gradient-baseline comparison.
 
 ## Development
 
